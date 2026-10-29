@@ -1,6 +1,6 @@
 # Withings Local (Bluetooth)
 
-Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13) and Body (WBS06) are supported; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
+Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13) and Body (WBS06, also sold as Nokia Body) are supported; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
 
 On Body Smart, step on the scale, and a minute later your weight, body fat, muscle mass and more show up as sensors in Home Assistant, ready for dashboards, history graphs and automations.
 
@@ -73,10 +73,10 @@ Copy the `custom_components/withings_local` folder from this repository into the
 2. **Give it the scale's key.** Pick **Fetch the key with my Withings login** and enter your Withings email and password. They are sent to Withings once to read the key, and not stored anywhere. (If you'd rather not, you can get the key yourself with [`tools/fetch_kl.py`](tools/fetch_kl.py) and choose **Enter the key myself**.)
 
 3. **Pair with the scale.** This only happens once:
-   1. Choose **Pair now** in Home Assistant and hold the button under the scale for **3 seconds** to enter setup mode.
-   2. **Body Smart (WBS13):** Type in the 6-digit code shown on the scale's display. You have about 30 seconds. **Body (WBS06):** No code is needed; Home Assistant pairs automatically.
+   - **Body Smart (WBS13):** hold the button under the scale for **3 seconds**, choose **Pair now** in Home Assistant, then type in the 6-digit code shown on the scale's display. You have about 30 seconds.
+   - **Body (WBS06):** choose **Pair now** in Home Assistant, then hold the button under the scale for **3 seconds**. No code is needed; Home Assistant pairs automatically.
 
-   The scale may then show **"Setup failed"**. Check whether pairing succeeded in Home Assistant and confirm it with a new weigh-in; the display message alone doesn't tell you whether synchronization works.
+   The scale may then show **"Setup failed"**. That's normal and harmless: the scale expected the Withings app, but if Home Assistant says pairing worked, it is saved. Your next weigh-in confirms it.
 
 4. **Weigh in.** About a minute after the reading finishes, the sensors update.
 

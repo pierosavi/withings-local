@@ -4,6 +4,15 @@ Notable changes to the Withings Local integration. Versions follow [semantic ver
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
+### Added
+- **Support for Body (WBS06)**, also sold as Nokia Body ([#3](https://github.com/pierosavi/withings-local/pull/3), thanks @lientry). It sends its readings over Bluetooth Classic rather than Bluetooth Low Energy, so Home Assistant listens for the scale's connection after a weigh-in instead of polling it. Setup pairs without a code. It needs a local Bluetooth adapter on Linux (BlueZ); ESPHome Bluetooth proxies can't do it. Sensors: weight and last weigh-in per user, plus battery and last sync. See [docs/wbs06.md](docs/wbs06.md).
+
+### Changed
+- Fetching the key with your Withings login now picks the scale that matches the one being set up, by model and Bluetooth address. When an account has several scales of the same model and none matches, setup says so instead of taking the first one; enter the key yourself in that case.
+- `tools/fetch_kl.py` takes `--model 7` for the Body, and stops instead of guessing when the account has several scales of that model.
+
 ## [0.3.3] - 2026-10-24
 
 ### Changed

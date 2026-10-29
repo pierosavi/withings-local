@@ -1,6 +1,6 @@
 [project]
 name = "withings-wpp"
-version = "0.3.3"
+version = "0.4.0"
 description = "Clean-room client for the Bluetooth protocol of Withings smart scales (read-only). Not affiliated with Withings."
 readme = "README.md"
 license = "MIT"

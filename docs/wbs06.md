@@ -1,5 +1,7 @@
 # Body (WBS06): local Bluetooth support
 
+Body (WBS06) was first sold as **Nokia Body**, while Nokia owned Withings (2016-2018); it's the same scale.
+
 Body (WBS06) uses a different transport from Body Smart
 (WBS13). Both models speak Withings' WPP protocol, but WBS06
 initiates **Bluetooth Classic RFCOMM** connections after a weigh-in.
