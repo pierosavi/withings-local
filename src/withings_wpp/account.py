@@ -55,8 +55,16 @@ def logout_params(session: str) -> dict:
     return {**COMMON, "action": "logout", "sessionid": session}
 
 
-def association_params(session: str) -> dict:
-    return {**COMMON, "action": "getbyaccountid", "sessionid": session, "type": -1, "enrich": "t"}
+def account_params(session: str) -> dict:
+    """Retrieve the account ID needed by the legacy association endpoint."""
+    return {**COMMON, "action": "get", "sessionid": session, "enrich": "t"}
+
+
+def association_params(session: str, account_id: int) -> dict:
+    return {
+        **COMMON, "action": "getbyaccountid", "sessionid": session,
+        "accountid": account_id, "type": -1, "enrich": "t",
+    }
 
 
 def users_params(session: str, accountid: int) -> dict:
@@ -93,6 +101,37 @@ def parse_login(resp: dict) -> str:
     return session
 
 
+def parse_account_id(resp: dict, email: str) -> int:
+    """Find the logged-in account without ever exposing other account details."""
+    if resp.get("status") != 0:
+        raise AccountError("could not identify Withings account", resp.get("status"))
+    body = resp.get("body")
+    body = body if isinstance(body, dict) else {}
+    accounts = body.get("account") or body.get("accounts") or []
+    if isinstance(accounts, dict):
+        accounts = [accounts]
+    if not isinstance(accounts, list):
+        raise AccountError("unexpected Withings account response")
+    candidates = [
+        candidate for candidate in accounts
+        if isinstance(candidate, dict) and candidate.get("id") is not None
+    ]
+    matches = [
+        candidate for candidate in candidates
+        if isinstance(candidate.get("email"), str)
+        and candidate["email"].strip().casefold() == email.strip().casefold()
+    ]
+    # Some versions omit email for a single-account response.
+    if not matches and len(candidates) == 1 and not candidates[0].get("email"):
+        matches = candidates
+    if len(matches) != 1:
+        raise AccountError("could not uniquely identify the Withings account")
+    account_id = matches[0]["id"]
+    if isinstance(account_id, bool) or not str(account_id).isdigit():
+        raise AccountError("invalid Withings account ID")
+    return int(account_id)
+
+
 def parse_scales(resp: dict, model: int | None = BODY_SMART_MODEL) -> list[ScaleSecret]:
     if resp.get("status") != 0:
         raise AccountError("could not list devices", resp.get("status"))
@@ -107,6 +146,89 @@ def parse_scales(resp: dict, model: int | None = BODY_SMART_MODEL) -> list[Scale
                 ScaleSecret(e.get("deviceid"), m, props.get("macaddress") or props.get("mac"), e["kl"], e.get("accountid"))
             )
     return scales
+
+
+def select_scale(
+    scales: list[ScaleSecret], *, model: int, address: str, identity_mac: str | None = None
+) -> ScaleSecret:
+    """Match the account's scale to its advertisement without guessing among devices.
+
+    The scale's advertised WPP UUID can carry a different identity MAC from the
+    address of its Bluetooth radio (WBS06 uses adjacent addresses).
+    """
+    def normalize(mac: str | None) -> str:
+        return "".join(c for c in (mac or "").lower() if c in "0123456789abcdef")
+
+    candidates = [scale for scale in scales if scale.model == model]
+    for mac in (identity_mac, address):
+        if mac:
+            exact = [scale for scale in candidates if scale.mac and normalize(scale.mac) == normalize(mac)]
+            if len(exact) == 1:
+                return exact[0]
+            if len(exact) > 1:
+                raise AccountError("multiple account devices share the scale's MAC")
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise AccountError("no matching scale found on this Withings account")
+    raise AccountError("multiple scales match this model; cannot identify the correct key")
+
+
+def association_diagnostics(
+    response: dict, *, address: str, identity_mac: str | None
+) -> dict:
+    """Summarize a failed key lookup without logging credentials, keys, or identifiers.
+
+    Include only recognized schema field names, numeric model IDs, and boolean
+    address matches. Never include account IDs, MACs, session tokens, or raw data.
+    """
+    def normalize(mac: str | None) -> str:
+        return "".join(char for char in (mac or "").lower() if char in "0123456789abcdef")
+
+    allowed_fields = {
+        "accountid", "associations", "deviceid", "deviceproperties", "devices",
+        "kl", "mac", "macaddress", "mac_address", "model", "modelid", "model_id",
+        "type",
+    }
+    entries = [
+        entry
+        for found in _find(response, "associations")
+        for entry in (found if isinstance(found, list) else [found])
+    ]
+    result = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            result.append({"association_is_dict": False})
+            continue
+        props = entry.get("deviceproperties")
+        props = props if isinstance(props, dict) else {}
+        model = props.get("model", props.get("modelid"))
+        api_model = int(model) if model is not None and str(model).isdigit() else None
+        mac_values = [
+            container.get(field)
+            for container in (entry, props)
+            for field in ("mac", "macaddress", "mac_address")
+            if isinstance(container.get(field), str)
+        ]
+        result.append(
+            {
+                "association_fields": sorted(allowed_fields & entry.keys()),
+                "device_property_fields": sorted(allowed_fields & props.keys()),
+                "api_model": api_model,
+                "key_present": bool(entry.get("kl")),
+                "key_nested": bool(props.get("kl")),
+                "identity_match": bool(identity_mac)
+                and any(normalize(value) == normalize(identity_mac) for value in mac_values),
+                "ble_address_match": any(normalize(value) == normalize(address) for value in mac_values),
+            }
+        )
+    body = response.get("body")
+    return {
+        "api_status": response.get("status") if type(response.get("status")) is int else None,
+        "body_fields": sorted(allowed_fields & body.keys()) if isinstance(body, dict) else [],
+        "association_count": len(entries),
+        "associations": result,
+    }
 
 
 def parse_users(resp: dict) -> dict[int, str]:

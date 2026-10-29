@@ -33,7 +33,7 @@
       },
       "pair": {
         "title": "Pair with the scale",
-        "description": "The scale only shares measurements over a paired Bluetooth connection, so Home Assistant has to pair with it once.\n\n1. **Hold the button under the scale for 3 seconds** (setup mode).\n2. Choose *Pair now*. The scale shows a 6-digit code, which you'll enter next.\n\nChoose *Skip* if this Home Assistant is already paired with the scale.",
+        "description": "The scale only shares measurements over a paired Bluetooth connection, so Home Assistant has to pair with it once.\n\n{pairing_instructions}\n\nChoose *Skip* if this Home Assistant is already paired with the scale.",
         "menu_options": {
           "pair_now": "Pair now",
           "pair_skip": "Skip (already paired)"
@@ -76,7 +76,7 @@
     },
     "error": {
       "invalid_auth": "Withings rejected the email or password.",
-      "no_scale": "No Body Smart scale was found on this Withings account.",
+      "no_scale": "No matching scale was found on this Withings account, or multiple scales could not be distinguished.",
       "cannot_connect": "Could not reach Withings.",
       "invalid_key": "That doesn't look like a valid key.",
       "unknown": "Unexpected error.",
@@ -88,10 +88,12 @@
       "no_devices_found": "No scale found. Step on it so it advertises, then try again.",
       "not_supported": "This device isn't a supported Withings scale.",
       "reconfigure_successful": "Done. The scale is set up again.",
-      "reauth_successful": "Done. The scale is paired again."
+      "reauth_successful": "Done. The scale is paired again.",
+      "pairing_not_available": "Body (WBS06) requires a local Linux Bluetooth Classic adapter with BlueZ pairing support. Add an adapter and try again."
     },
     "progress": {
-      "wait_for_scale": "Hold the button under the scale for 3 seconds. When the scale shows a 6-digit code, the next step asks for it."
+      "wait_for_scale": "Hold the button under the scale for 3 seconds. When the scale shows a 6-digit code, the next step asks for it.",
+      "wait_for_scale_wbs06": "Hold the button under the scale for 3 seconds. Home Assistant will pair the Classic Bluetooth connection required for weigh-ins, without a passkey."
     }
   },
   "entity": {

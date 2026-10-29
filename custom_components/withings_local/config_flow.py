@@ -21,7 +21,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
-from .const import BODY_SMART_MODEL_ID, CONF_KL, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX
+from .const import BODY_MODEL_ID, BODY_SMART_MODEL_ID, CONF_KL, CONF_MODEL_ID, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
+from .classic_pairing import ClassicPairingSession
 from .coordinator import is_setup_mode
 from .pairing import PairingFailed, PairingSession, PairingUnsupported, device_path
 
@@ -32,20 +33,37 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def device_name(info: BluetoothServiceInfoBleak) -> str:
-    """The advertised name, or "Body Smart" when the adapter didn't receive one (HA then uses the address)."""
+    """The advertised name, or the model's name when the scanner missed it."""
     name = info.name or ""
     if not name or format_mac(name) == format_mac(info.address) or name.replace("-", ":").upper() == info.address.upper():
-        return LOCAL_NAME_PREFIX
+        model = scale_model_id(info)
+        return SUPPORTED_MODELS.get(model, (LOCAL_NAME_PREFIX, ""))[0]
     return name
 
 
-def is_body_smart(info: BluetoothServiceInfoBleak) -> bool:
+def scale_model_id(info: BluetoothServiceInfoBleak) -> int | None:
+    """Recognize supported models by their WPP UUID, even without a local name."""
+    for uuid in info.service_uuids:
+        w = WithingsUuid.parse(uuid)
+        if w and w.model_id in SUPPORTED_MODELS:
+            return w.model_id
     if info.name and info.name.startswith(LOCAL_NAME_PREFIX):
-        return True
-    return any((w := WithingsUuid.parse(u)) and w.model_id == BODY_SMART_MODEL_ID for u in info.service_uuids)
+        return BODY_SMART_MODEL_ID
+    return None
 
 
-async def fetch_kl(hass, email: str, password: str, address: str) -> tuple[str, dict[str, str]]:
+def scale_identity_mac(info: BluetoothServiceInfoBleak, model_id: int) -> str | None:
+    """The WPP advertisement may contain the account MAC instead of the BLE address."""
+    for uuid in info.service_uuids:
+        w = WithingsUuid.parse(uuid)
+        if w and w.model_id == model_id and len(w.tail) == 12 and w.tail.strip("0"):
+            return ":".join(w.tail[i : i + 2] for i in range(0, 12, 2)).upper()
+    return None
+
+
+async def fetch_kl(
+    hass, email: str, password: str, address: str, model_id: int, identity_mac: str | None
+) -> tuple[str, dict[str, str]]:
     """Log in to the Withings account; return the scale's kl and {user id: first name}.
 
     Credentials are used once and not stored. User names are optional: failure to list them
@@ -61,10 +79,31 @@ async def fetch_kl(hass, email: str, password: str, address: str) -> tuple[str, 
     session = account.parse_login(await post(account.LOGIN_URL, account.login_params(email, password)))
     users: dict[str, str] = {}
     try:
-        scales = account.parse_scales(await post(account.ASSOCIATION_URL, account.association_params(session)))
-        if scales and scales[0].accountid:
+        try:
+            account_id = account.parse_account_id(
+                await post(account.ACCOUNT_URL, account.account_params(session)), email
+            )
+        except account.AccountError as err:
+            # An error code or a missing/ambiguous account ID is safe to log.
+            # Never log the response, session, email, or account ID.
+            _LOGGER.warning("Withings account ID lookup failed: %s", err)
+            raise
+        association_response = await post(account.ASSOCIATION_URL, account.association_params(session, account_id))
+        try:
+            scales = account.parse_scales(association_response, model=None)
+            selected = account.select_scale(scales, model=model_id, address=address, identity_mac=identity_mac)
+        except account.AccountError as err:
+            _LOGGER.warning(
+                "Withings account key lookup failed (%s); sanitized association structure: %s",
+                err,
+                account.association_diagnostics(
+                    association_response, address=address, identity_mac=identity_mac
+                ),
+            )
+            raise
+        if selected.accountid:
             try:
-                names = account.parse_users(await post(account.ACCOUNT_URL, account.users_params(session, scales[0].accountid)))
+                names = account.parse_users(await post(account.ACCOUNT_URL, account.users_params(session, selected.accountid)))
                 users = {str(uid): name for uid, name in names.items()}
             except (account.AccountError, aiohttp.ClientError, TimeoutError):
                 _LOGGER.debug("Could not list Withings users; names will be generic", exc_info=True)
@@ -73,11 +112,7 @@ async def fetch_kl(hass, email: str, password: str, address: str) -> tuple[str, 
             await post(account.LOGIN_URL, account.logout_params(session))
         except (aiohttp.ClientError, TimeoutError):
             _LOGGER.debug("Withings logout failed", exc_info=True)
-    if not scales:
-        raise account.AccountError("no Body Smart on this account")
-    # On Linux the Bluetooth address is the scale's MAC; prefer the matching association.
-    kl = next((s.kl for s in scales if s.mac and format_mac(s.mac) == format_mac(address)), scales[0].kl)
-    return kl, users
+    return selected.kl, users
 
 
 class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -88,7 +123,11 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._address: str | None = None
         self._name: str | None = None
+        self._selected_info: BluetoothServiceInfoBleak | None = None
         self._discovered: dict[str, str] = {}
+        self._discovered_info: dict[str, BluetoothServiceInfoBleak] = {}
+        self._model_id = BODY_SMART_MODEL_ID
+        self._identity_mac: str | None = None
         self._kl: str | None = None
         self._users: dict[str, str] | None = None
         self._pair_task: asyncio.Task | None = None
@@ -96,7 +135,7 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         self._pair_error: str | None = None
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
-        if not is_body_smart(discovery_info):
+        if (model_id := scale_model_id(discovery_info)) is None:
             # Enough to tell which device this is, without its address; users paste it into issues.
             _LOGGER.debug(
                 "Unsupported Withings device: name=%r model_ids=%s",
@@ -107,7 +146,10 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(format_mac(discovery_info.address))
         self._abort_if_unique_id_configured()
         self._address = discovery_info.address
+        self._selected_info = discovery_info
         self._name = device_name(discovery_info)
+        self._model_id = model_id
+        self._identity_mac = scale_identity_mac(discovery_info, model_id)
         self.context["title_placeholders"] = {"name": self._name}
         return await self.async_step_bluetooth_confirm()
 
@@ -121,14 +163,19 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._address = user_input[CONF_ADDRESS]
             self._name = self._discovered[self._address].rsplit(" (", 1)[0]
+            info = self._discovered_info[self._address]
+            self._selected_info = info
+            self._model_id = scale_model_id(info) or BODY_SMART_MODEL_ID
+            self._identity_mac = scale_identity_mac(info, self._model_id)
             await self.async_set_unique_id(format_mac(self._address), raise_on_progress=False)
             self._abort_if_unique_id_configured()
             return await self.async_step_key()
 
         current = self._async_current_ids(include_ignore=False)
         for info in async_discovered_service_info(self.hass, connectable=True):
-            if format_mac(info.address) not in current and is_body_smart(info):
+            if format_mac(info.address) not in current and scale_model_id(info) is not None:
                 self._discovered[info.address] = f"{device_name(info)} ({info.address})"
+                self._discovered_info[info.address] = info
         if not self._discovered:
             return self.async_abort(reason="no_devices_found")
         return self.async_show_form(
@@ -150,7 +197,9 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "missing_credentials"
         if user_input is not None and not errors:
             try:
-                kl, users = await fetch_kl(self.hass, email, password, self._address)
+                kl, users = await fetch_kl(
+                    self.hass, email, password, self._address, self._model_id, self._identity_mac
+                )
             except account.InvalidCredentials:
                 errors["base"] = "invalid_auth"
             except account.AccountError:
@@ -199,9 +248,25 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_pair(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Explain pairing and let the user start it (or skip if already paired)."""
-        return self.async_show_menu(step_id="pair", menu_options=["pair_now", "pair_skip"])
-    # The scale only shares data over a link bonded with the passkey on its display. We wait for
-    # it to advertise in setup mode (button held 3 s), then pair through a BlueZ agent.
+        instructions = (
+            "1. Choose *Pair now*.\n"
+            "2. **Hold the button under the scale for 3 seconds** (setup mode). "
+            "Home Assistant pairs without a passkey.\n\n"
+            "The scale may show 'Setup failed' afterward even when pairing succeeds. "
+            "Check for a new weigh-in in Home Assistant to confirm synchronization."
+            if self._model_id == BODY_MODEL_ID
+            else (
+                "1. **Hold the button under the scale for 3 seconds** (setup mode).\n"
+                "2. Choose *Pair now*. The scale shows a 6-digit code, which you'll enter next."
+            )
+        )
+        return self.async_show_menu(
+            step_id="pair", menu_options=["pair_now", "pair_skip"],
+            description_placeholders={"pairing_instructions": instructions},
+        )
+
+    # Both models advertise in setup mode after a button hold. WBS06 uses Just Works,
+    # while WBS13 requires the six-digit passkey displayed by the scale.
 
     async def async_step_pair_now(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Wait for the scale in setup mode, request pairing, wait until it shows its code."""
@@ -210,7 +275,9 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             self._pair_task = self.hass.async_create_task(self._async_start_pairing())
         if not self._pair_task.done():
             return self.async_show_progress(
-                step_id="pair_now", progress_action="wait_for_scale", progress_task=self._pair_task
+                step_id="pair_now",
+                progress_action="wait_for_scale_wbs06" if self._model_id == BODY_MODEL_ID else "wait_for_scale",
+                progress_task=self._pair_task,
             )
         task, self._pair_task = self._pair_task, None
         try:
@@ -242,9 +309,18 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         """Return True when the scale is already paired (no code needed)."""
         service_info = await self._async_wait_for_setup_mode()
         _LOGGER.info("%s: setup-mode signal received via %s, requesting pairing", self._name, service_info.source)
-        self._pairing = PairingSession(device_path(self.hass, service_info))
+        if self._model_id == BODY_MODEL_ID:
+            # WBS06's actual weigh-in transport is incoming Classic RFCOMM,
+            # not GATT. Pair the bearer we need, without touching the LE bond.
+            # This method handles adapter state and agent cleanup itself.
+            await ClassicPairingSession(device_path(self.hass, service_info)).pair()
+            _LOGGER.info("%s: Classic Bluetooth bond confirmed", self._name)
+            return True
+        self._pairing = PairingSession(
+            device_path(self.hass, service_info)
+        )
         if await self._pairing.start():
-            _LOGGER.info("%s: already paired with this Home Assistant", self._name)
+            _LOGGER.info("%s: Bluetooth already paired with Home Assistant", self._name)
             return True
         await self._pairing.wait_for_passkey_request()
         _LOGGER.info("%s: the scale shows its code; waiting for the user to enter it", self._name)
@@ -263,7 +339,7 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
         @callback
         def _on_advertisement(info: BluetoothServiceInfoBleak) -> None:
-            if not found.done() and info.connectable and info.time >= started and is_setup_mode(info):
+            if not found.done() and info.connectable and info.time >= started and is_setup_mode(info, self._model_id):
                 found.set_result(info)
 
         cancel = bluetooth.async_register_advertisement_callback(self.hass, _on_advertisement, self._address)
@@ -303,25 +379,52 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_pair_timeout(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """The scale never showed up in setup mode."""
-        return self.async_show_menu(step_id="pair_timeout", menu_options=["pair_now", "pair_skip"])
+        options = ["pair_now"] if self._model_id == BODY_MODEL_ID else ["pair_now", "pair_skip"]
+        return self.async_show_menu(step_id="pair_timeout", menu_options=options)
 
     async def async_step_pair_failed(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        options = ["pair_now"] if self._model_id == BODY_MODEL_ID else ["pair_now", "pair_skip"]
         return self.async_show_menu(
             step_id="pair_failed",
-            menu_options=["pair_now", "pair_skip"],
+            menu_options=options,
             description_placeholders={"error": self._pair_error or "unknown"},
         )
 
     async def async_step_pair_unsupported(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Pairing can't be driven here (ESPHome proxy, or not Linux)."""
+        if self._model_id == BODY_MODEL_ID:
+            return self.async_abort(reason="pairing_not_available")
         return self.async_show_menu(step_id="pair_unsupported", menu_options=["pair_skip"])
 
     async def async_step_pair_skip(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if self._model_id == BODY_MODEL_ID:
+            # A BLE bond is not enough for scale-initiated Classic RFCOMM.
+            info = self._selected_info
+            if info is None or info.address != self._address:
+                info = next(
+                    (item for item in async_discovered_service_info(self.hass, connectable=True)
+                     if item.address == self._address),
+                    None,
+                )
+            if info is None:
+                self._pair_error = "No local Bluetooth advertisement is available to verify the Classic bond"
+                return await self.async_step_pair_failed()
+            try:
+                if not await ClassicPairingSession(device_path(self.hass, info)).bonded():
+                    self._pair_error = "No stored Classic Bluetooth bond; choose Pair now"
+                    return await self.async_step_pair_failed()
+            except (PairingFailed, PairingUnsupported) as err:
+                self._pair_error = str(err)
+                return await self.async_step_pair_failed()
+            except Exception:
+                _LOGGER.warning("Cannot inspect existing WBS06 Classic Bluetooth bond", exc_info=True)
+                self._pair_error = "Cannot verify the existing Classic Bluetooth bond"
+                return await self.async_step_pair_failed()
         return await self.async_step_pair_finish()
 
     async def async_step_pair_finish(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         assert self._address is not None and self._kl is not None
-        data = {CONF_ADDRESS: self._address, CONF_KL: self._kl}
+        data = {CONF_ADDRESS: self._address, CONF_KL: self._kl, CONF_MODEL_ID: self._model_id}
         if self._users:
             data[CONF_USERS] = self._users
         if self.source == SOURCE_REAUTH:
@@ -352,6 +455,7 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         entry = self._get_reauth_entry()
         self._address, self._name = entry.data[CONF_ADDRESS], entry.title
+        self._model_id = entry.data.get(CONF_MODEL_ID, BODY_SMART_MODEL_ID)
         self._kl, self._users = entry.data[CONF_KL], entry.data.get(CONF_USERS)
         return await self.async_step_reauth_confirm()
 
@@ -366,5 +470,6 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         entry = self._get_reconfigure_entry()
         self._address, self._name = entry.data[CONF_ADDRESS], entry.title
+        self._model_id = entry.data.get(CONF_MODEL_ID, BODY_SMART_MODEL_ID)
         self._kl, self._users = entry.data[CONF_KL], entry.data.get(CONF_USERS)
         return await self.async_step_pair()

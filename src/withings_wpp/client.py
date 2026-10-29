@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import struct
 from dataclasses import dataclass
 
@@ -16,8 +17,10 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from . import auth
 from .codec import DEVICE_REQUEST, Message, Reassembler, Tlv, WppError
+from .fragfsm import FragFsmReassembler, frame as fragfsm_frame
 from .measures import MeasureGroup, merge_by_time, parse_groups
 from .messages import (
+    APP_VERSION,
     Cmd,
     CmdError,
     MeasureAction,
@@ -38,6 +41,8 @@ CHAR_PREFIX = "00000024"
 ERR_UNSUPPORTED = -3
 SUBSCRIBE_TIMEOUT = 15.0
 WRITE_TIMEOUT = 10.0
+FRAGFSM_RESET_TIMEOUT = 10.0
+FRAGFSM_SETTLE_SECONDS = 0.5
 
 
 class WppCommandError(Exception):
@@ -69,16 +74,14 @@ class Authenticated:
     scale_verified: bool
 
 
-class WppSession:
-    """Request/response over the single WPP characteristic.
+class WppConversation:
+    """Shared WPP request/response handling over GATT or an RFCOMM byte stream.
 
     `sync_ok` controls both SYNC_OK paths: sending one at the end of a read, and echoing one the
     device sends as a request. Devices whose reaction to it is unknown should turn it off.
     """
 
-    def __init__(self, client: BleakClient, trace=None, *, sync_ok: bool = True) -> None:
-        self._client = client
-        self._char = find_wpp_characteristic(client)
+    def __init__(self, trace=None, *, sync_ok: bool = True) -> None:
         self._reasm = Reassembler()
         self._inbox: asyncio.Queue[Message] = asyncio.Queue()
         self._trace = trace or (lambda direction, raw: None)
@@ -104,18 +107,6 @@ class WppSession:
                 if not t.done():
                     t.cancel()
 
-    async def start(self) -> None:
-        _LOGGER.debug("subscribing to notifications on %s", self._char.uuid)
-        try:
-            async with asyncio.timeout(SUBSCRIBE_TIMEOUT):
-                await self._until_disconnect(self._client.start_notify(self._char, self._on_notify), "subscribing")
-        except TimeoutError as err:
-            raise TimeoutError(
-                f"subscribing to notifications took more than {SUBSCRIBE_TIMEOUT:.0f}s "
-                "(the Bluetooth stack may be trying to pair with the scale)"
-            ) from err
-        _LOGGER.debug("subscribed")
-
     def _on_notify(self, _char, data: bytearray) -> None:
         self._trace("rx", bytes(data))
         for msg in self._reasm.feed(bytes(data)):
@@ -139,7 +130,10 @@ class WppSession:
         _LOGGER.debug("-> %s", describe(msg))
         self._trace("tx", raw)
         async with asyncio.timeout(WRITE_TIMEOUT):
-            await self._until_disconnect(self._client.write_gatt_char(self._char, raw, response=True), "writing")
+            await self._until_disconnect(self._write(raw), "writing")
+
+    async def _write(self, raw: bytes) -> None:
+        raise NotImplementedError
 
     async def request(
         self, msg: Message, *, expect: set[int] | None = None, multi: bool = False, timeout: float = 5.0
@@ -182,16 +176,104 @@ class WppSession:
             _LOGGER.debug("dropping unanswered %s", describe(self._inbox.get_nowait()))
 
 
+class WppSession(WppConversation):
+    """WPP conversation over the scale's notifying GATT characteristic."""
+
+    def __init__(self, client: BleakClient, trace=None, *, sync_ok: bool = True) -> None:
+        super().__init__(trace, sync_ok=sync_ok)
+        self._client = client
+        self._char = find_wpp_characteristic(client)
+
+    async def start(self) -> None:
+        _LOGGER.debug("subscribing to notifications on %s", self._char.uuid)
+        try:
+            async with asyncio.timeout(SUBSCRIBE_TIMEOUT):
+                await self._until_disconnect(self._client.start_notify(self._char, self._on_notify), "subscribing")
+        except TimeoutError as err:
+            raise TimeoutError(
+                f"subscribing to notifications took more than {SUBSCRIBE_TIMEOUT:.0f}s "
+                "(the Bluetooth stack may be trying to pair with the scale)"
+            ) from err
+        _LOGGER.debug("subscribed")
+
+    async def _write(self, raw: bytes) -> None:
+        await self._client.write_gatt_char(self._char, raw, response=True)
+
+
+class RfcommWppSession(WppConversation):
+    """WPP over FragFsm-framed Classic Bluetooth RFCOMM.
+
+    The accepted socket is owned by the caller. No Classic pairing is
+    initiated here; the request/response protocol still verifies the
+    scale's application-level key before accepting measurements.
+    """
+
+    def __init__(self, sock: socket.socket, trace=None, *, sync_ok: bool = False) -> None:
+        super().__init__(trace, sync_ok=sync_ok)
+        self._sock = sock
+        self._reader_task: asyncio.Task | None = None
+        self._fragfsm = FragFsmReassembler()
+        self._reset_received = asyncio.Event()
+        # Aggregate transport diagnostics only. Never persist frame bytes,
+        # challenges, measurement values, Bluetooth addresses, or the KL.
+        self.rx_bytes = 0
+        self.tx_bytes = 0
+        self.rx_chunks = 0
+
+    async def start(self) -> None:
+        if self._reader_task is not None:
+            raise RuntimeError("RFCOMM reader already started")
+        self._reader_task = asyncio.create_task(self._receive())
+        # Wait for the scale's RESET before starting WPP.
+        try:
+            async with asyncio.timeout(FRAGFSM_RESET_TIMEOUT):
+                await self._until_disconnect(self._reset_received.wait(), "waiting for FragFsm RESET")
+        except TimeoutError:
+            _LOGGER.warning("WBS06 did not send FragFsm RESET before WPP initialization")
+        else:
+            await asyncio.sleep(FRAGFSM_SETTLE_SECONDS)
+
+    async def _receive(self) -> None:
+        try:
+            while chunk := await asyncio.get_running_loop().sock_recv(self._sock, 4096):
+                self.rx_bytes += len(chunk)
+                self.rx_chunks += 1
+                for payload in self._fragfsm.feed(chunk):
+                    if payload is None:
+                        self._reset_received.set()
+                        _LOGGER.debug("WBS06 FragFsm RESET received")
+                    else:
+                        self._on_notify(None, bytearray(payload))
+        except (OSError, WppError):
+            _LOGGER.debug("RFCOMM stream ended unexpectedly", exc_info=True)
+        finally:
+            self.mark_disconnected()
+
+    async def _write(self, raw: bytes) -> None:
+        packet = fragfsm_frame(raw)
+        await asyncio.get_running_loop().sock_sendall(self._sock, packet)
+        self.tx_bytes += len(packet)
+
+    async def close(self) -> None:
+        self.mark_disconnected()
+        self._sock.close()
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            await asyncio.gather(self._reader_task, return_exceptions=True)
+
+
 class ScaleClient:
     """High-level read-only scale operations."""
 
-    def __init__(self, session: WppSession) -> None:
+    def __init__(self, session: WppConversation) -> None:
         self.session = session
 
-    async def authenticate(self, kl: str) -> Authenticated:
+    async def authenticate(
+        self, kl: str, *, app_version: int = APP_VERSION, timeout: float = 5.0
+    ) -> Authenticated:
         # The device answers a PROBE with PROBE_CHALLENGE, or with PROBE when it skips authentication.
         answers = {Cmd.PROBE, Cmd.PROBE_CHALLENGE}
-        (reply,) = await self.session.request(probe(), expect=answers)
+        (reply,) = await self.session.request(probe(app_version=app_version), expect=answers, timeout=timeout)
         if reply.base_command == Cmd.PROBE:
             # Setup/button session: the scale didn't ask for authentication.
             return Authenticated(_probe_reply(reply), False, False)
@@ -201,7 +283,7 @@ class ScaleClient:
         challenge = ProbeChallenge.parse(tlvs[0].value)
         own = auth.new_challenge()
         (final,) = await self.session.request(
-            auth.challenge_reply(challenge.challenge, challenge.mac, kl, own), expect=answers
+            auth.challenge_reply(challenge.challenge, challenge.mac, kl, own), expect=answers, timeout=timeout
         )
         their_answer = final.find(Obj.PROBE_CHALLENGE_RESPONSE)
         verified = bool(their_answer) and auth.verify(their_answer[0].value[1:], own, challenge.mac, kl)
@@ -260,15 +342,27 @@ class SyncResult:
     battery: int | None = None
 
 
-async def read_measurements(ble: BleakClient, kl: str, session: WppSession | None = None) -> SyncResult:
+async def read_measurements(
+    ble: BleakClient | None,
+    kl: str,
+    session: WppConversation | None = None,
+    *,
+    app_version: int = APP_VERSION,
+    authentication_timeout: float = 5.0,
+) -> SyncResult:
     """Run one read-only session on a connected client: authenticate, read, disconnect.
 
     Pass a pre-built `session` to wire its `mark_disconnected` into the client's disconnect callback.
     """
-    session = session or WppSession(ble)
+    if session is None:
+        if ble is None:
+            raise ValueError("a BLE client or a connected WPP session is required")
+        session = WppSession(ble)
     await session.start()
     scale = ScaleClient(session)
-    auth_result = await scale.authenticate(kl)
+    auth_result = await scale.authenticate(
+        kl, app_version=app_version, timeout=authentication_timeout
+    )
     firmware = auth_result.reply.soft_version if auth_result.reply else None
     if not auth_result.authenticated:
         return SyncResult(False, False, None, firmware, [])

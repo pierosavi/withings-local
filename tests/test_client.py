@@ -130,6 +130,7 @@ async def test_unsolicited_startup_messages_dont_answer_requests():
     result = await wpp_client.read_measurements(ble, KL)
     assert result.authenticated and result.scale_verified
     assert result.connect_reason == 2 and result.battery == 80
+    assert ble.sent[0].find(Obj.APP_PROBE)[0].value == struct.pack(">BBI", 1, 1, 202609240)
 
 
 async def test_unsolicited_message_while_waiting_is_ignored():

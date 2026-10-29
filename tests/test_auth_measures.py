@@ -1,4 +1,3 @@
-import hashlib
 import struct
 
 from withings_wpp.auth import answer, challenge_reply, verify
@@ -11,9 +10,10 @@ MAC = "00:11:22:33:44:55"
 KL = "test-kl-not-a-real-secret-000000"
 
 
-def test_answer_matches_formula():
+def test_answer_matches_documented_sha1_vector():
     ch = bytes(range(16))
-    assert answer(ch, MAC, KL) == hashlib.sha1(ch + MAC.encode() + KL.encode()).digest()
+    # Fixed SHA1 fixture for 00..0f || ASCII MAC || ASCII kl, not derived from answer().
+    assert answer(ch, MAC, KL).hex() == "9436bcff5e90ec1b0a13cd1776e98e1095ff4f53"
 
 
 def test_challenge_reply_layout_and_verify():

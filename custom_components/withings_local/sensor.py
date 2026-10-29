@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_USERS, DOMAIN, GUEST_USER_ID
+from .const import BODY_MODEL_ID, CONF_USERS, DOMAIN, GUEST_USER_ID, SUPPORTED_MODELS
 from .coordinator import ScaleData, WeighIn, WithingsLocalConfigEntry, WithingsScaleCoordinator
 
 
@@ -123,6 +123,8 @@ SCALE_SENSORS: tuple[ScaleSensorDescription, ...] = (
 
 # A guest weigh-in carries no user ID and only a weight.
 GUEST_SENSOR_KEYS = {"weight", "measured_at"}
+# WBS06 exposes only weight and weigh-in time per user.
+BODY_SENSOR_KEYS = GUEST_SENSOR_KEYS
 
 
 def user_display_name(entry: WithingsLocalConfigEntry, user_id: int, known_users: list[int]) -> str:
@@ -147,6 +149,7 @@ async def async_setup_entry(
             for user_id in user_ids
             for d in USER_SENSORS
             if user_id != GUEST_USER_ID or d.key in GUEST_SENSOR_KEYS
+            if coordinator.model_id != BODY_MODEL_ID or d.key in BODY_SENSOR_KEYS
         )
 
     add_users(coordinator.known_users)
@@ -188,13 +191,14 @@ class _WithingsSensor(RestoreSensor):
 
 
 def _scale_device(coordinator: WithingsScaleCoordinator) -> DeviceInfo:
+    model, model_id = SUPPORTED_MODELS[coordinator.model_id]
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.address)},
         connections={(CONNECTION_BLUETOOTH, coordinator.address)},
         name=coordinator.title,
         manufacturer="Withings",
-        model="Body Smart",
-        model_id="WBS13",
+        model=model,
+        model_id=model_id,
     )
 
 
@@ -225,7 +229,7 @@ class UserSensor(_WithingsSensor):
             identifiers={(DOMAIN, f"{coordinator.address}-user{user_id}")},
             name=f"{coordinator.title} ({user_name})",
             manufacturer="Withings",
-            model="Body Smart",
+            model=SUPPORTED_MODELS[coordinator.model_id][0],
             via_device_id=dr.async_get_device_id_by_identifier(
                 coordinator.hass, (DOMAIN, coordinator.address), config_entry_id=coordinator.config_entry_id
             ),

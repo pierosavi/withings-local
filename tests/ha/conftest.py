@@ -11,6 +11,10 @@ from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 ADDRESS = "00:11:22:33:44:55"
 INSTALLED_UUID = "00000020-5749-5448-0010-001122334455"  # tail = MAC: installed, has data
 SETUP_UUID = "00000020-5749-5448-0010-000000000000"  # tail zeros: button/setup session
+WBS06_ADDRESS = "02:00:00:00:56:5F"  # synthetic locally administered address
+WBS06_IDENTITY = "02:00:00:00:56:5E"
+WBS06_UUID = "00000020-5749-5448-0007-02000000565e"
+WBS06_SETUP_UUID = "00000020-5749-5448-0007-000000000000"
 TEST_KL = "test-kl-not-a-real-secret-000000"
 
 
