@@ -1,10 +1,11 @@
 """Connect to a waking Withings scale and inventory its GATT table (read-only).
 
 Usage: uv run tools/gatt_dump.py [timeout_seconds]
-Run it, then wake the scale (short button press). The script connects as soon as it sees the
-Withings service UUID and lists services, characteristics and descriptors. It writes nothing and
-subscribes to nothing; it only reads characteristics in the standard Device Information and
-Battery services, so it shouldn't trigger pairing.
+Run it, then wake the scale (short button press). The script connects as soon as it sees a
+Withings advertisement (the Withings service UUID or 0xFD77 service data) and lists services,
+characteristics and descriptors. It writes nothing and subscribes to nothing; it only reads
+characteristics in the standard Device Information and Battery services, so it shouldn't trigger
+pairing.
 Output: captures/ble/gatt-<timestamp>.json (git-ignored: may include serial numbers).
 """
 
@@ -16,13 +17,10 @@ from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
-WITH_MARKER = "-5749-5448-"
+from withings_wpp.advertisement import is_withings
+
 SAFE_READ_SERVICES = {"0000180a", "0000180f"}  # Device Information, Battery
 OUT = Path(__file__).resolve().parent.parent / "captures" / "ble"
-
-
-def is_withings(adv) -> bool:
-    return any(WITH_MARKER in u.lower() for u in adv.service_uuids)
 
 
 async def main(timeout: float) -> None:
@@ -31,7 +29,7 @@ async def main(timeout: float) -> None:
     found = asyncio.get_running_loop().create_future()
 
     def on_adv(device, adv):
-        if is_withings(adv) and not found.done():
+        if is_withings(adv.service_uuids, adv.service_data) and not found.done():
             found.set_result((device, adv))
 
     async with BleakScanner(on_adv):

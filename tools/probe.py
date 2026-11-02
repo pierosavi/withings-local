@@ -1,6 +1,9 @@
 """Send one WPP PROBE to a waking Withings scale and record everything it says back.
 
-Usage: uv run tools/probe.py [--app-version N] [--os-version N] [--listen SECONDS]
+Usage: uv run tools/probe.py [--char PREFIX] [--app-version N] [--os-version N] [--listen SECONDS]
+
+By default PROBE goes to the WPP characteristic `00000024-…` (Body Smart, Body). Newer devices
+such as the BeamO use `00000004-…` in the service ending in ASCII "WITHINGS": pass `--char 00000004`.
 
 Safe by design. The script sends only PROBE, optionally CONNECT_REASON and STORED_MEASURE action 0
 (both reads), and DISCONNECT.
@@ -39,7 +42,7 @@ from withings_wpp.messages import (
 )
 
 WITH_MARKER = "-5749-5448-"
-CHAR_SHORT = "00000024"
+DEFAULT_CHAR = "00000024"
 OUT = Path(__file__).resolve().parent.parent / "captures" / "ble"
 
 
@@ -111,9 +114,11 @@ async def main(args) -> None:
 
     try:
         async with BleakClient(device, timeout=20) as client:
-            char = next(
-                c for s in client.services for c in s.characteristics if c.uuid.startswith(CHAR_SHORT) and WITH_MARKER in c.uuid
-            )
+            chars = [c for s in client.services for c in s.characteristics if WITH_MARKER in c.uuid.lower()]
+            char = next((c for c in chars if c.uuid.lower().startswith(args.char)), None)
+            if char is None:
+                found_chars = ", ".join(c.uuid for c in chars) or "none"
+                raise RuntimeError(f"no Withings characteristic starting with {args.char}; found: {found_chars}")
             print(f"[{stamp():6.2f}s] connected, MTU {client.mtu_size}", flush=True)
             await client.start_notify(char, on_notify)
 
@@ -150,6 +155,12 @@ async def main(args) -> None:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--char",
+        type=lambda v: v.lower().removeprefix("0x").zfill(8),
+        default=DEFAULT_CHAR,
+        help="prefix of the WPP characteristic UUID (default 00000024; 00000004 on newer devices)",
+    )
     p.add_argument("--app-version", type=int, default=202609240, help="AppProbe version field")
     p.add_argument("--os-version", type=int, default=34, help="AppProbeOsVersion, e.g. Android API level")
     p.add_argument("--listen", type=float, default=8, help="seconds to keep listening after the last message")

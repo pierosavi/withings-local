@@ -124,6 +124,8 @@ Wake the device (step on it, or press its button), then search the logs (**Setti
 2. `uv run tools/gatt_dump.py`: its Bluetooth services. Read-only, no pairing.
 3. `uv run tools/probe.py`: its reply to a hello message. Read-only; a scale in setup mode may show "Setup failed", which is harmless.
 
+   If the GATT dump shows the service `00000000-0000-5749-5448-494e47530000` without a `00000024-…` characteristic, add `--char 00000004` to `probe.py`.
+
 These tools inspect **BLE**. Failure to connect with GATT does not rule out a different transport. On Linux, `bluetoothctl info AA:BB:CC:DD:EE:FF` can show a previously discovered device's Classic Bluetooth services without pairing or changing its configuration. Body (WBS06), for example, synchronizes through incoming RFCOMM rather than GATT. Include the model and transport observations when reporting a new device, but redact its address.
 
 Paste the console output, after replacing the device's Bluetooth address (`AA:BB:CC:DD:EE:FF`) and any serial number with `xx`. `probe.py` already hides them, but the scan and the GATT dump print them. Don't attach the files these tools save under `captures/`: they contain identifiers, and they can contain measurements.
