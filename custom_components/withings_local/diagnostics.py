@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_KL, CONF_USERS
 from .coordinator import WITHINGS_COMPANY_ID, WithingsLocalConfigEntry, has_new_data
+from .withings_wpp.advertisement import FD77
 
 TO_REDACT = {CONF_KL, CONF_ADDRESS, CONF_USERS}
 
@@ -36,7 +37,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Withing
             "service_uuid_count": len(info.service_uuids),
             "withings_uuid_present": any("-5749-5448-" in u for u in info.service_uuids),
             "withings_manufacturer_data_present": WITHINGS_COMPANY_ID in info.manufacturer_data,
-            "new_data": has_new_data(info),
+            "fd77_service_data_present": FD77 in {k.lower() for k in info.service_data},
+            "new_data": has_new_data(info, coordinator.model_id),
         },
         "last_poll_successful": coordinator.last_poll_successful,
         "users": [

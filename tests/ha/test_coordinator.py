@@ -297,3 +297,43 @@ async def test_wbs06_classic_probe_timeout_is_logged_without_measurement(hass, m
         assert "sent 25 bytes, received 0 bytes in 0 chunks" in caplog.text
     finally:
         remote.close()
+
+
+def test_body_comp_new_data_and_pairing_signal_from_fd77() -> None:
+    from custom_components.withings_local.const import BODY_COMP_MODEL_ID
+    from custom_components.withings_local.coordinator import is_setup_mode
+
+    from .conftest import BODY_COMP_IDLE_FD77, BODY_COMP_SETUP_FD77, body_comp_info
+
+    assert has_new_data(body_comp_info(), BODY_COMP_MODEL_ID)
+    assert not has_new_data(body_comp_info(BODY_COMP_IDLE_FD77), BODY_COMP_MODEL_ID)
+    assert not has_new_data(body_comp_info(BODY_COMP_SETUP_FD77), BODY_COMP_MODEL_ID)
+    assert not has_new_data(service_info(), BODY_COMP_MODEL_ID)  # a Body Smart's advertisement
+    assert not has_new_data(body_comp_info())  # Body Smart rules ignore FD77
+    # Any Body Comp advertisement can start pairing; other models' can't.
+    assert is_setup_mode(body_comp_info(BODY_COMP_IDLE_FD77), BODY_COMP_MODEL_ID)
+    assert not is_setup_mode(service_info(uuid=SETUP_UUID), BODY_COMP_MODEL_ID)
+
+
+async def test_body_comp_sync_uses_its_profile(hass, mock_bluetooth) -> None:
+    from custom_components.withings_local.const import BODY_COMP_MODEL_ID, CONF_MODEL_ID
+    from custom_components.withings_local.withings_wpp.devices import BODY_COMP
+
+    from .conftest import body_comp_info
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Body Comp",
+        data={"address": ADDRESS, CONF_KL: TEST_KL, CONF_MODEL_ID: BODY_COMP_MODEL_ID},
+    )
+    entry.add_to_hass(hass)
+    coordinator = WithingsScaleCoordinator(hass, entry)
+    client = MagicMock(disconnect=AsyncMock())
+    result = SyncResult(True, True, 2, 1311, [MeasureGroup(datetime(2026, 1, 2, tzinfo=UTC), [ALICE], 0, 0, [Measure(1, 70.0)])])
+    with (
+        patch("custom_components.withings_local.coordinator.establish_connection", AsyncMock(return_value=client)),
+        patch("custom_components.withings_local.coordinator.WppSession") as session,
+        patch("custom_components.withings_local.coordinator.read_measurements", AsyncMock(return_value=result)),
+    ):
+        data = await coordinator._async_sync(body_comp_info())  # noqa: SLF001
+    assert session.call_args.kwargs["profile"] is BODY_COMP
+    assert data.users[ALICE].values == {"weight": 70.0}

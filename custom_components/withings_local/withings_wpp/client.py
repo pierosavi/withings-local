@@ -17,6 +17,7 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from . import auth
 from .codec import DEVICE_REQUEST, Message, Reassembler, Tlv, WppError
+from .devices import BODY_SMART, DeviceProfile
 from .fragfsm import FragFsmReassembler, frame as fragfsm_frame
 from .measures import MeasureGroup, merge_by_time, parse_groups
 from .messages import (
@@ -36,8 +37,6 @@ from .messages import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-WITH_MARKER = "-5749-5448-"
-CHAR_PREFIX = "00000024"
 ERR_UNSUPPORTED = -3
 SUBSCRIBE_TIMEOUT = 15.0
 WRITE_TIMEOUT = 10.0
@@ -59,12 +58,12 @@ class ScaleDisconnected(Exception):
     """The scale dropped the Bluetooth link mid-session."""
 
 
-def find_wpp_characteristic(client: BleakClient) -> BleakGATTCharacteristic:
+def find_wpp_characteristic(client: BleakClient, profile: DeviceProfile = BODY_SMART) -> BleakGATTCharacteristic:
     for service in client.services:
         for char in service.characteristics:
-            if char.uuid.startswith(CHAR_PREFIX) and WITH_MARKER in char.uuid:
+            if profile.is_wpp_characteristic(char.uuid.lower()):
                 return char
-    raise LookupError("Withings WPP characteristic not found")
+    raise LookupError(f"{profile.name} WPP characteristic not found")
 
 
 @dataclass
@@ -177,12 +176,18 @@ class WppConversation:
 
 
 class WppSession(WppConversation):
-    """WPP conversation over the scale's notifying GATT characteristic."""
+    """WPP conversation over the notifying GATT characteristic of a device with this `profile`.
 
-    def __init__(self, client: BleakClient, trace=None, *, sync_ok: bool = True) -> None:
-        super().__init__(trace, sync_ok=sync_ok)
+    `sync_ok` defaults to the profile's.
+    """
+
+    def __init__(
+        self, client: BleakClient, trace=None, *, profile: DeviceProfile = BODY_SMART, sync_ok: bool | None = None
+    ) -> None:
+        super().__init__(trace, sync_ok=profile.sync_ok if sync_ok is None else sync_ok)
         self._client = client
-        self._char = find_wpp_characteristic(client)
+        self.profile = profile
+        self._char = find_wpp_characteristic(client, profile)
 
     async def start(self) -> None:
         _LOGGER.debug("subscribing to notifications on %s", self._char.uuid)

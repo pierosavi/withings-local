@@ -1,6 +1,6 @@
 # Withings Local (Bluetooth)
 
-Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13) and Body (WBS06, also sold as Nokia Body) are supported; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
+Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13) and Body (WBS06, also sold as Nokia Body) are supported, and Body Comp (WBS12) is experimental; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
 
 On Body Smart, step on the scale, and a minute later your weight, body fat, muscle mass and more show up as sensors in Home Assistant, ready for dashboards, history graphs and automations.
 
@@ -18,11 +18,13 @@ Guest weigh-ins go to a separate "Guest" device (weight only). The scale itself 
 
 **[Body (WBS06)](docs/wbs06.md):** weight and last weigh-in per user, plus battery and last sync.
 
+**Body Comp (WBS12), experimental:** the same sensors as Body Smart, for the values it reports. It works from one community report and hasn't been tested with Home Assistant yet; please report how it goes in [#5](https://github.com/pierosavi/withings-local/issues/5).
+
 ## Before you start
 
 You need:
 
-- **A Withings Body Smart (WBS13)** or **Body (WBS06)**. Other Withings devices aren't supported yet.
+- **A Withings Body Smart (WBS13)** or **Body (WBS06)**, or a **Body Comp (WBS12)** (experimental). Other Withings devices aren't supported yet.
 - **Home Assistant 2026.10 or newer.**
 - **A Bluetooth adapter on the Home Assistant machine**, within a few meters of the scale. The built-in Bluetooth of a Raspberry Pi works, and so does a USB Bluetooth dongle. Body (WBS06) specifically needs a Bluetooth Classic (BR/EDR) adapter on Linux with BlueZ. ESPHome Bluetooth proxies are *not* enough on their own: pairing needs a local adapter, and WBS06 also needs an incoming Classic connection.
 - **[HACS](https://hacs.xyz)** (the Home Assistant Community Store), to install and update the integration. If you don't have it yet, follow the [HACS setup guide](https://hacs.xyz/docs/use/) first.
@@ -75,6 +77,7 @@ Copy the `custom_components/withings_local` folder from this repository into the
 3. **Pair with the scale.** This only happens once:
    - **Body Smart (WBS13):** hold the button under the scale for **3 seconds**, choose **Pair now** in Home Assistant, then type in the 6-digit code shown on the scale's display. You have about 30 seconds.
    - **Body (WBS06):** choose **Pair now** in Home Assistant, then hold the button under the scale for **3 seconds**. No code is needed; Home Assistant pairs automatically.
+   - **Body Comp (WBS12):** choose **Pair now** in Home Assistant, then **briefly press** the button under the scale, and type in the 6-digit code shown on the scale's display.
 
    The scale may then show **"Setup failed"**. That's normal and harmless: the scale expected the Withings app, but if Home Assistant says pairing worked, it is saved. Your next weigh-in confirms it.
 

@@ -512,3 +512,54 @@ async def test_reauth_pairs_again(hass: HomeAssistant, mock_bluetooth) -> None:
     with patch("custom_components.withings_local.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {"passkey": "654321"})
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "reauth_successful"
+
+
+async def test_body_comp_discovered_from_fd77_and_paired_with_short_press(hass: HomeAssistant, mock_bluetooth) -> None:
+    from custom_components.withings_local.const import BODY_COMP_MODEL_ID
+
+    from .conftest import BODY_COMP_SETUP_FD77, body_comp_info
+
+    # Unnamed (passive scan): the title still says what it is.
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=body_comp_info(name=ADDRESS)
+    )
+    assert result["description_placeholders"] == {"name": "Body Comp"}
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_KL: TEST_KL})
+    assert result["step_id"] == "pair"
+    assert "briefly" in result["description_placeholders"]["pairing_instructions"]
+
+    session = FakeSession()
+    accepted = []
+
+    def fake_register(hass, callback, address):
+        for info in (service_info(uuid=None, mfr=None), body_comp_info(BODY_COMP_SETUP_FD77)):
+            info.time = 1e12
+            hass.loop.call_soon(callback, info)
+        return lambda: None
+
+    patches = (
+        patch("custom_components.withings_local.config_flow.bluetooth.async_register_advertisement_callback", fake_register),
+        patch("custom_components.withings_local.config_flow.device_path", side_effect=lambda hass, info: accepted.append(info) or "/org/bluez/hci0/dev_00_11_22_33_44_55"),
+        patch("custom_components.withings_local.config_flow.PairingSession", return_value=session),
+    )
+    result = await _run_pair_now(hass, result, patches)
+    assert result["step_id"] == "passkey"
+    assert [i.service_data for i in accepted] == [{"0000fd77-0000-1000-8000-00805f9b34fb": BODY_COMP_SETUP_FD77}]
+    with patch("custom_components.withings_local.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"passkey": "123456"})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {"address": ADDRESS, CONF_KL: TEST_KL, CONF_MODEL_ID: BODY_COMP_MODEL_ID}
+
+
+def test_body_comp_identity_mac_from_setup_fd77() -> None:
+    from custom_components.withings_local.config_flow import scale_identity_mac, scale_model_id
+    from custom_components.withings_local.const import BODY_COMP_MODEL_ID
+
+    from .conftest import BODY_COMP_SETUP_FD77, body_comp_info
+
+    info = body_comp_info(BODY_COMP_SETUP_FD77)
+    assert scale_model_id(info) == BODY_COMP_MODEL_ID
+    assert scale_identity_mac(info, BODY_COMP_MODEL_ID) == "00:11:22:33:44:55"
+    assert scale_identity_mac(body_comp_info(), BODY_COMP_MODEL_ID) is None

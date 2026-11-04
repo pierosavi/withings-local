@@ -4,6 +4,10 @@ Notable changes to the Withings Local integration. Versions follow [semantic ver
 
 ## [Unreleased]
 
+### Added
+- **Experimental support for Body Comp (WBS12)** ([#5](https://github.com/pierosavi/withings-local/issues/5)). It's discovered from its Bluetooth advertisement and reads over Withings' newer Bluetooth service. Pairing uses the 6-digit code after a short button press. It's based on one community report and hasn't been tested with Home Assistant yet; it never sends the sync acknowledgement (SYNC_OK), whose effect on this model is unknown.
+- `tools/fetch_kl.py --model 18` fetches a Body Comp's key, and `tools/read_measurements.py` reads the model saved by `fetch_kl.py`.
+
 ## [0.4.0] - 2026-10-29
 
 ### Added

@@ -1,6 +1,6 @@
 """Fetch your scale's `kl` secret from your own Withings account (one-time setup).
 
-Usage: uv run tools/fetch_kl.py [--model 7|16]
+Usage: uv run tools/fetch_kl.py [--model 7|16|18]
 
 The scale asks for proof that the client knows `kl`, a per-scale secret that Withings creates
 when the scale is added to an account. The official app downloads it from the account API, and
@@ -50,9 +50,9 @@ def post(url: str, params: dict) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--model", type=int, choices=(7, account.BODY_SMART_MODEL),
+        "--model", type=int, choices=(7, account.BODY_SMART_MODEL, 18),
         default=account.BODY_SMART_MODEL,
-        help="Withings model ID: 7 = Body (WBS06), 16 = Body Smart (WBS13; default)",
+        help="Withings model ID: 7 = Body (WBS06), 16 = Body Smart (WBS13; default), 18 = Body Comp (WBS12)",
     )
     args = parser.parse_args()
     print("Withings login (sent only to Withings over HTTPS; nothing is stored).")

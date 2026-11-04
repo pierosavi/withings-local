@@ -10,8 +10,9 @@ Two forms exist:
   - bit1: sync requested (the scale has data and wants a connection)
   - bit2: wake-up
 
-  The nibble order inside TLV headers is unconfirmed; check it against a real Bluetooth-mode
-  advertisement.
+  Type 2 holds the MAC when the device isn't set up. Headers put the type in the high nibble: a
+  Body Comp's reported advertisements `10 12 11 00 26 <MAC>` (not set up) and `10 12 11 03 34 …`
+  (set up, after a weigh-in in Bluetooth mode) parse as model 18 with these fields.
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ class WithingsUuid:
         if WITH_MARKER not in u:
             return None
         parts = u.split("-")
+        if parts[1:3] != ["5749", "5448"]:
+            # Withings' newer service (00000000-0000-5749-5448-…) carries no model: use FD77.
+            return None
         return cls(service=int(parts[0], 16), model_id=int(parts[3], 16), tail=parts[4])
 
 
@@ -49,6 +53,12 @@ class Fd77:
     @property
     def wants_connection(self) -> bool:
         return bool(self.installed and self.sync_requested)
+
+    @property
+    def mac(self) -> str | None:
+        """The MAC in type 2 (`AA:BB:…`), present when the device isn't set up."""
+        raw = self.fields.get(2)
+        return ":".join(f"{b:02X}" for b in raw) if raw and len(raw) == 6 else None
 
     @classmethod
     def parse(cls, data: bytes) -> Fd77 | None:

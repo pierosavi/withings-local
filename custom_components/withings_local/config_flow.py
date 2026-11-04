@@ -10,7 +10,8 @@ import aiohttp
 from bluetooth_data_tools import monotonic_time_coarse
 import voluptuous as vol
 from .withings_wpp import account
-from .withings_wpp.advertisement import WithingsUuid
+from .withings_wpp.advertisement import FD77, Fd77, WithingsUuid
+from .withings_wpp.devices import model_ids
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak, async_discovered_service_info
@@ -21,7 +22,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
-from .const import BODY_MODEL_ID, BODY_SMART_MODEL_ID, CONF_KL, CONF_MODEL_ID, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
+from .const import BODY_COMP_MODEL_ID, BODY_MODEL_ID, BODY_SMART_MODEL_ID, CONF_KL, CONF_MODEL_ID, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
 from .classic_pairing import ClassicPairingSession
 from .coordinator import is_setup_mode
 from .pairing import PairingFailed, PairingSession, PairingUnsupported, device_path
@@ -42,13 +43,18 @@ def device_name(info: BluetoothServiceInfoBleak) -> str:
 
 
 def scale_model_id(info: BluetoothServiceInfoBleak) -> int | None:
-    """Recognize supported models by their WPP UUID, even without a local name."""
+    """Recognize supported models by their WPP UUID or FD77 data, even without a local name."""
     for uuid in info.service_uuids:
         w = WithingsUuid.parse(uuid)
         if w and w.model_id in SUPPORTED_MODELS:
             return w.model_id
+    for model_id in sorted(model_ids((), info.service_data)):
+        if model_id in SUPPORTED_MODELS:
+            return model_id
     if info.name and info.name.startswith(LOCAL_NAME_PREFIX):
         return BODY_SMART_MODEL_ID
+    if info.name and info.name.startswith(SUPPORTED_MODELS[BODY_COMP_MODEL_ID][0]):
+        return BODY_COMP_MODEL_ID
     return None
 
 
@@ -58,6 +64,9 @@ def scale_identity_mac(info: BluetoothServiceInfoBleak, model_id: int) -> str | 
         w = WithingsUuid.parse(uuid)
         if w and w.model_id == model_id and len(w.tail) == 12 and w.tail.strip("0"):
             return ":".join(w.tail[i : i + 2] for i in range(0, 12, 2)).upper()
+    for key, value in info.service_data.items():
+        if key.lower() == FD77 and (fd := Fd77.parse(bytes(value))) and fd.model_id == model_id and fd.mac:
+            return fd.mac
     return None
 
 
@@ -140,7 +149,7 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             _LOGGER.debug(
                 "Unsupported Withings device: name=%r model_ids=%s",
                 discovery_info.name,
-                sorted({w.model_id for u in discovery_info.service_uuids if (w := WithingsUuid.parse(u))}),
+                sorted(model_ids(discovery_info.service_uuids, discovery_info.service_data)),
             )
             return self.async_abort(reason="not_supported")
         await self.async_set_unique_id(format_mac(discovery_info.address))
@@ -256,6 +265,13 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             "Check for a new weigh-in in Home Assistant to confirm synchronization."
             if self._model_id == BODY_MODEL_ID
             else (
+                "1. Choose *Pair now*.\n"
+                "2. **Press the button under the scale briefly.** The scale shows a 6-digit code, "
+                "which you'll enter next.\n\n"
+                "The scale may show 'Setup failed' afterward. That's harmless."
+            )
+            if self._model_id == BODY_COMP_MODEL_ID
+            else (
                 "1. **Hold the button under the scale for 3 seconds** (setup mode).\n"
                 "2. Choose *Pair now*. The scale shows a 6-digit code, which you'll enter next."
             )
@@ -276,7 +292,10 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         if not self._pair_task.done():
             return self.async_show_progress(
                 step_id="pair_now",
-                progress_action="wait_for_scale_wbs06" if self._model_id == BODY_MODEL_ID else "wait_for_scale",
+                progress_action={
+                    BODY_MODEL_ID: "wait_for_scale_wbs06",
+                    BODY_COMP_MODEL_ID: "wait_for_scale_body_comp",
+                }.get(self._model_id, "wait_for_scale"),
                 progress_task=self._pair_task,
             )
         task, self._pair_task = self._pair_task, None

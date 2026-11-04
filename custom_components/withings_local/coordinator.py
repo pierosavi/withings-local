@@ -11,8 +11,9 @@ import socket
 import time
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
-from .withings_wpp.advertisement import WithingsUuid
+from .withings_wpp.advertisement import FD77, Fd77, WithingsUuid
 from .withings_wpp.client import RfcommWppSession, SyncResult, WppSession, read_measurements
+from .withings_wpp.devices import BODY_SMART, PROFILES
 from .withings_wpp.measures import MeasureGroup, merge_by_time
 
 from homeassistant.components import bluetooth
@@ -26,6 +27,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BODY_COMP_MODEL_ID,
     BODY_MODEL_ID,
     BODY_SMART_MODEL_ID,
     CONF_KL,
@@ -84,13 +86,25 @@ def latest_per_user(groups: list[MeasureGroup]) -> dict[int, WeighIn]:
 WITHINGS_COMPANY_ID = 0x03FF
 
 
-def has_new_data(service_info: BluetoothServiceInfoBleak) -> bool:
+def _fd77(service_info: BluetoothServiceInfoBleak, model_id: int) -> Fd77 | None:
+    for key, value in service_info.service_data.items():
+        if key.lower() == FD77 and (fd := Fd77.parse(bytes(value))) and fd.model_id == model_id:
+            return fd
+    return None
+
+
+def has_new_data(service_info: BluetoothServiceInfoBleak, model_id: int = BODY_SMART_MODEL_ID) -> bool:
     """True when the scale advertises as an installed device (after a weigh-in).
 
-    Two signals, because passive scanners may not receive the scan response:
+    Body Comp only advertises FD77 service data: it has new data when its flags say installed
+    and sync requested. Body Smart has two signals, because passive scanners may not receive the
+    scan response:
     - the service UUID tail carries the scale's MAC (all zeros in setup/button sessions);
     - the Withings manufacturer data is non-zero (all zeros in setup sessions).
     """
+    if model_id == BODY_COMP_MODEL_ID:
+        fd = _fd77(service_info, model_id)
+        return fd is not None and fd.wants_connection
     for uuid in service_info.service_uuids:
         w = WithingsUuid.parse(uuid)
         if w and w.model_id == BODY_SMART_MODEL_ID and w.tail.strip("0"):
@@ -111,7 +125,12 @@ def is_setup_mode(service_info: BluetoothServiceInfoBleak, model_id: int = BODY_
     """True when the scale advertises in setup mode (button held 3 s): its service UUID then has
     an all-zero tail. Home Assistant merges a device's advertisement data with earlier packets,
     so weigh-in data (MAC tail, manufacturer bytes) may still be present; only look for the
-    setup-mode UUID."""
+    setup-mode UUID.
+
+    Body Comp has no setup-mode UUID and pairs on any connection: any of its advertisements will
+    do (a short button press)."""
+    if model_id == BODY_COMP_MODEL_ID:
+        return _fd77(service_info, model_id) is not None
     return any(
         (w := WithingsUuid.parse(u)) and w.model_id == model_id and not w.tail.strip("0")
         for u in service_info.service_uuids
@@ -244,7 +263,7 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
             # WBS06 initiates Classic RFCOMM after weigh-ins.
             # Do not race it with a BLE connection or trigger implicit SMP.
             return False
-        new_data = has_new_data(service_info)
+        new_data = has_new_data(service_info, self.model_id)
         # The cooldown only avoids re-reading after a successful sync; after a failure, retry while
         # the scale is still advertising (its window is short).
         due = (
@@ -300,7 +319,7 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
             _LOGGER.debug("%s: connected after %.1fs", self.title, time.monotonic() - started)
             try:
                 # A stuck session must never block later syncs.
-                session = WppSession(client)
+                session = WppSession(client, profile=PROFILES.get(self.model_id, BODY_SMART))
                 async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
                     result = await read_measurements(client, self._kl, session)
             finally:

@@ -176,3 +176,24 @@ async def test_sync_ok_is_sent_by_default():
 
 def stored_actions(ble):
     return [m.find(Obj.STORED_MEASURE_ACTION)[0].value[0] for m in ble.sent if m.command == Cmd.STORED_MEASURE]
+
+
+async def test_body_comp_uses_its_characteristic_and_no_sync_ok():
+    from withings_wpp.devices import BODY_COMP
+
+    ble = FakeScale()
+    other = SimpleNamespace(uuid="00000005-0000-5749-5448-494e47530000")
+    wpp = SimpleNamespace(uuid="00000004-0000-5749-5448-494e47530000")
+    ble.services = [SimpleNamespace(characteristics=[CHAR, other, wpp])]
+    session = wpp_client.WppSession(ble, profile=BODY_COMP)
+    assert session._char is wpp  # noqa: SLF001
+    result = await wpp_client.read_measurements(ble, KL, session)
+    assert result.scale_verified
+    assert Cmd.SYNC_OK not in [m.command for m in ble.sent]
+
+
+def test_missing_characteristic_names_the_model():
+    from withings_wpp.devices import BODY_COMP
+
+    with pytest.raises(LookupError, match="Body Comp"):
+        wpp_client.find_wpp_characteristic(FakeClient(), BODY_COMP)

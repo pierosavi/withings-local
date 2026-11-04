@@ -93,6 +93,7 @@
     },
     "progress": {
       "wait_for_scale": "Hold the button under the scale for 3 seconds. When the scale shows a 6-digit code, the next step asks for it.",
+      "wait_for_scale_body_comp": "Press the button under the scale briefly. When the scale shows a 6-digit code, the next step asks for it.",
       "wait_for_scale_wbs06": "Hold the button under the scale for 3 seconds. Home Assistant will pair the Classic Bluetooth connection required for weigh-ins, without a passkey."
     }
   },

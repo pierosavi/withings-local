@@ -104,7 +104,11 @@ The app's background scanner matches either of two advertisements:
   - Type 2 is the MAC.
   - Type 3 is a short salted identity hash.
 
-The app connects when the scale advertises *installed + sync requested*. That's the weigh-in trigger we need in Bluetooth mode. The nibble order in the TLV headers still has to be confirmed on a real Bluetooth-mode advertisement.
+The app connects when the scale advertises *installed + sync requested*. That's the weigh-in trigger we need in Bluetooth mode.
+
+A Body Comp (WBS12, model 18) confirms the layout, with the type in the high nibble of each TLV header ([#5](https://github.com/pierosavi/withings-local/issues/5)):
+- not set up, after a button press: `10 12 11 00 26 <MAC>` (flags 0, then type 2 with 6 bytes);
+- set up, Bluetooth mode, after a weigh-in: `10 12 11 03 34 <4 bytes>` (installed + sync requested, then type 3 with 4 bytes). It advertised for about 40 s.
 
 ## Wi-Fi vs Bluetooth mode — from app analysis
 - **Wi-Fi mode has no "also sync over Bluetooth" setting.**
@@ -118,6 +122,15 @@ The app connects when the scale advertises *installed + sync requested*. That's 
 - The app downloads it with the device association data, stores it locally, and pushes it to the scale during setup and syncs.
 - **The scale never reveals it.**
 - `PROBE_REPLY.secret` is a different value, used by the app to open a server session on the scale's behalf.
+
+## Body Comp (WBS12) — reported
+From a community report on one Body Comp, Raspberry Pi 5 with BlueZ ([#5](https://github.com/pierosavi/withings-local/issues/5)). Not tested with Home Assistant yet.
+
+- **Advertising.** Only FD77 service data and the local name `Body Comp xx`; no "WITH" service UUID, so it's recognized by the FD77 model (18). In Wi-Fi mode it doesn't advertise after a weigh-in.
+- **Transport.** The newer service `00000000-0000-5749-5448-494e47530000`, with characteristics `…0004`–`…0008`. WPP runs on `…0004`, as on the BeamO.
+- **Pairing.** Subscribing to `…0004` starts passkey pairing: the scale shows a 6-digit code, and an unpaired subscription hangs. After pairing (`bluetoothctl`, KeyboardDisplay agent) the scale shows "Setup failed", like the Body Smart.
+- **Session.** With a bond, the standard PROBE gets a PROBE reply (firmware 1311), and CONNECT_REASON and STORED_MEASURE GET_STATE answer as on the Body Smart.
+- **Not yet known:** whether it challenges after a weigh-in and accepts our answer, what GET_ALL returns, and what SYNC_OK does. Until then we never send SYNC_OK to it.
 
 ## BeamO signal queue — reported
 From a community report on a BeamO A8 ([#2](https://github.com/pierosavi/withings-local/issues/2)). Not tested with a BeamO, and nothing here is implemented. It's recorded so nobody reimplements the risky parts by accident.
