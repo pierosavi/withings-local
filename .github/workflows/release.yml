@@ -47,4 +47,8 @@ jobs:
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+        # A version with letters (0.5.0b1) is a beta: HACS only offers pre-releases to users who opt in.
+        run: |
+          prerelease=()
+          if [[ "${GITHUB_REF_NAME#v}" =~ [a-z] ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag "${prerelease[@]}"
