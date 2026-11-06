@@ -4,6 +4,15 @@ Notable changes to the Withings Local integration. Versions follow [semantic ver
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
+### Added
+- **Support for Body Comp (WBS12)** ([#5](https://github.com/pierosavi/withings-local/issues/5), thanks @tinkerden for testing). It's discovered from its Bluetooth advertisement and reads over Withings' newer Bluetooth service. Pairing uses the 6-digit code after a short button press. Sensors: weight, body composition and heart rate per user, guest weigh-ins, battery and last sync. It never sends the sync acknowledgement (SYNC_OK): the scale doesn't need it, and readings stay on the scale for the Withings app.
+- `tools/fetch_kl.py --model 18` fetches a Body Comp's key, and `tools/read_measurements.py` reads the model saved by `fetch_kl.py`.
+
+### Changed
+- The README says that accounts that sign in with an emailed code need a password to fetch the key.
+
 ## [0.5.0b1] - 2026-11-05
 
 This is a beta: HACS offers it only if you turn on the integration's **Pre-release** switch.

@@ -3710,7 +3710,7 @@ wheels = [
 
 [[package]]
 name = "withings-wpp"
-version = "0.5.0b1"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "bleak" },

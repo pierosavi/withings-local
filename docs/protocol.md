@@ -124,13 +124,14 @@ A Body Comp (WBS12, model 18) confirms the layout, with the type in the high nib
 - `PROBE_REPLY.secret` is a different value, used by the app to open a server session on the scale's behalf.
 
 ## Body Comp (WBS12) — reported
-From a community report on one Body Comp, Raspberry Pi 5 with BlueZ ([#5](https://github.com/pierosavi/withings-local/issues/5)). Not tested with Home Assistant yet.
+From a community report on one Body Comp, with a Raspberry Pi 5 (BlueZ) and Home Assistant OS ([#5](https://github.com/pierosavi/withings-local/issues/5)).
 
 - **Advertising.** Only FD77 service data and the local name `Body Comp xx`; no "WITH" service UUID, so it's recognized by the FD77 model (18). In Wi-Fi mode it doesn't advertise after a weigh-in.
 - **Transport.** The newer service `00000000-0000-5749-5448-494e47530000`, with characteristics `…0004`–`…0008`. WPP runs on `…0004`, as on the BeamO.
 - **Pairing.** Subscribing to `…0004` starts passkey pairing: the scale shows a 6-digit code, and an unpaired subscription hangs. After pairing (`bluetoothctl`, KeyboardDisplay agent) the scale shows "Setup failed", like the Body Smart.
 - **Session.** With a bond, the standard PROBE gets a PROBE reply (firmware 1311), and CONNECT_REASON and STORED_MEASURE GET_STATE answer as on the Body Smart.
-- **Not yet known:** whether it challenges after a weigh-in and accepts our answer, what GET_ALL returns, and what SYNC_OK does. Until then we never send SYNC_OK to it.
+- **Reading.** After a weigh-in (connect reason 2) the scale challenges and accepts our answer, and GET_ALL returns the usual measurement types: weight, body composition and heart rate. A guest weigh-in is stored too, weight only. Types 177/178, 189, 201–203 and 207 (likely impedance) and TLVs 299 and 2451 aren't decoded.
+- **SYNC_OK.** We never send it. Without it the next connection still works, and the readings stay on the scale until the Withings app syncs; after that the scale returns only newer readings. Which command the app uses to clear them is unknown.
 
 ## BeamO signal queue — reported
 From a community report on a BeamO A8 ([#2](https://github.com/pierosavi/withings-local/issues/2)). Not tested with a BeamO, and nothing here is implemented. It's recorded so nobody reimplements the risky parts by accident.

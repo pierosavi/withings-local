@@ -4,8 +4,8 @@ The codec, authentication and stored-measurement commands are the same on every 
 profile only records the differences. Body (WBS06) isn't here: it speaks WPP over Classic
 RFCOMM, not GATT.
 
-The Body Comp profile comes from a community report (issue #5, one WBS12 on a Raspberry Pi with
-BlueZ) and hasn't been tested with Home Assistant yet.
+The Body Comp profile comes from a community report (issue #5, one WBS12, tested with BlueZ and
+Home Assistant).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class DeviceProfile:
     model_code: str
     # Matches the WPP characteristic UUID (lower case).
     is_wpp_characteristic: Callable[[str], bool]
-    # Send SYNC_OK after a read and echo the device's own. Off where its effect is unknown.
+    # Send SYNC_OK after a read and echo the device's own. Off where the device doesn't need it.
     sync_ok: bool
 
 
@@ -46,7 +46,7 @@ BODY_COMP = DeviceProfile(
     model_code="WBS12",
     # Reported: `…0005` is also writable and notifies, but PROBE was only tried on `…0004`.
     is_wpp_characteristic=lambda uuid: uuid == WITHINGS_SERVICE_WPP,
-    # SYNC_OK's effect on this model is unknown: never send it.
+    # Reconnects work without SYNC_OK, so don't send it: we don't know what it does on this model.
     sync_ok=False,
 )
 

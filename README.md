@@ -1,6 +1,6 @@
 # Withings Local (Bluetooth)
 
-Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13) and Body (WBS06, also sold as Nokia Body) are supported, and Body Comp (WBS12) is experimental; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
+Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13), Body Comp (WBS12) and Body (WBS06, also sold as Nokia Body) are supported; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
 
 On Body Smart, step on the scale, and a minute later your weight, body fat, muscle mass and more show up as sensors in Home Assistant, ready for dashboards, history graphs and automations.
 
@@ -18,17 +18,17 @@ Guest weigh-ins go to a separate "Guest" device (weight only). The scale itself 
 
 **[Body (WBS06)](docs/wbs06.md):** weight and last weigh-in per user, plus battery and last sync.
 
-**Body Comp (WBS12), experimental:** the same sensors as Body Smart, for the values it reports. It works from one community report and hasn't been tested with Home Assistant yet; please report how it goes in [#5](https://github.com/pierosavi/withings-local/issues/5).
+**Body Comp (WBS12):** the same sensors as Body Smart, for the values it reports. Tested by one user so far ([#5](https://github.com/pierosavi/withings-local/issues/5)); reports from other setups are welcome there.
 
 ## Before you start
 
 You need:
 
-- **A Withings Body Smart (WBS13)** or **Body (WBS06)**, or a **Body Comp (WBS12)** (experimental). Other Withings devices aren't supported yet.
+- **A Withings Body Smart (WBS13)**, **Body Comp (WBS12)** or **Body (WBS06)**. Other Withings devices aren't supported yet.
 - **Home Assistant 2026.10 or newer.**
 - **A Bluetooth adapter on the Home Assistant machine**, within a few meters of the scale. The built-in Bluetooth of a Raspberry Pi works, and so does a USB Bluetooth dongle. Body (WBS06) specifically needs a Bluetooth Classic (BR/EDR) adapter on Linux with BlueZ. ESPHome Bluetooth proxies are *not* enough on their own: pairing needs a local adapter, and WBS06 also needs an incoming Classic connection.
 - **[HACS](https://hacs.xyz)** (the Home Assistant Community Store), to install and update the integration. If you don't have it yet, follow the [HACS setup guide](https://hacs.xyz/docs/use/) first.
-- **Your Withings account** (the one you use in the Withings app). Setup uses it once to get your scale's key. Your password is not stored.
+- **Your Withings account** (the one you use in the Withings app). Setup uses it once to get your scale's key. Your password is not stored. If you sign in to Withings with an emailed code, set a password for your account first.
 
 ## Step 1: switch the scale to Bluetooth mode
 
@@ -83,7 +83,7 @@ Copy the `custom_components/withings_local` folder from this repository into the
 
 4. **Weigh in.** About a minute after the reading finishes, the sensors update.
 
-Each person gets their own device, named **Body Smart (name)** or **Body (name)**. If you set up with your Withings login, the names come from your account; with a pasted key they're called "User 1", "User 2" and so on, and you can rename them in Home Assistant.
+Each person gets their own device, named after the scale, for example **Body Smart (name)**. If you set up with your Withings login, the names come from your account; with a pasted key they're called "User 1", "User 2" and so on, and you can rename them in Home Assistant.
 
 ## Updating
 
@@ -91,7 +91,7 @@ HACS tells you when a new version is out: you'll see an update under **Settings 
 
 ## Troubleshooting
 
-- **A weigh-in didn't show up.** If your phone's Withings app reaches the scale first, it uploads the readings and then deletes them from the scale, so Home Assistant can miss them. Keep the Bluetooth adapter close to the scale. (Home Assistant never deletes anything, so the Withings app still gets every reading.)
+- **A weigh-in didn't show up.** If your phone's Withings app reaches the scale first, it uploads the readings and then deletes them from the scale, so Home Assistant can miss them. Keep the Bluetooth adapter close to the scale, or turn off your phone's Bluetooth near the scale; the app gets the readings later when you turn it back on. (Home Assistant never deletes anything, so the Withings app still gets every reading.)
 - **"Reauthentication required".** The pairing was lost, for example after you changed the scale's batteries. Click the notification and pair again (step 3 above). You can also re-pair at any time from the integration's **⋮ → Reconfigure** menu.
 - **It worked once and then stopped, and I also use ESPHome Bluetooth proxies.** Home Assistant may be connecting to the scale through a proxy, which doesn't hold the pairing. Move the scale closer to the Home Assistant machine's own Bluetooth adapter than to any proxy.
 - **Never discovered at all.** Check that the scale is in Bluetooth mode (step 1), and that Home Assistant's **Bluetooth** integration is set up and sees your adapter.
